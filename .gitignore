@@ -1,0 +1,14 @@
+# 构建产物
+build/
+*.obj
+*.pdb
+*.ilk
+*.exp
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# 临时文件
+*.tmp
