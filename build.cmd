@@ -38,4 +38,30 @@ if errorlevel 1 (
 )
 
 echo [OK] build\QuickMove.exe
+
+rem ---- SHA256 checksum (Release 页校验用) ----
+echo [INFO] SHA256 ...
+if exist "build\checksum.txt" del "build\checksum.txt"
+> "build\checksum.txt" echo QuickMove.exe SHA256
+certutil -hashfile "build\QuickMove.exe" SHA256 | findstr /v /i /c:"CertUtil" /c:"hash of" >> "build\checksum.txt"
+type "build\checksum.txt"
+
+rem ---- selftest（随仓库入库的自动测试，失败即中断） ----
+if exist "tests\selftest.cpp" (
+  echo [INFO] compiling selftest.exe ...
+  cl /nologo /std:c++17 /utf-8 /W4 /O2 /MT /EHsc /DUNICODE /D_UNICODE /Isrc ^
+     tests\selftest.cpp src\path_utils.cpp src\file_move.cpp tests\config_store_redirect.cpp ^
+     /Fobuild\ /Fdbuild\ /Fe:build\selftest.exe /link /SUBSYSTEM:CONSOLE
+  if errorlevel 1 (
+    echo [ERROR] selftest build failed.
+    exit /b 1
+  )
+  echo [INFO] running selftest ...
+  build\selftest.exe
+  if errorlevel 1 (
+    echo [ERROR] selftest FAILED.
+    exit /b 1
+  )
+)
+
 endlocal
