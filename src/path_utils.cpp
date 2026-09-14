@@ -5,7 +5,9 @@
 #include <shlobj.h>
 #include <shlwapi.h>
 
+#include <algorithm>
 #include <string>
+#include <vector>
 
 #pragma comment(lib, "Ole32.lib")
 #pragma comment(lib, "Shell32.lib")
@@ -60,13 +62,6 @@ std::wstring environmentPath(const wchar_t* name) {
 }
 
 // 去掉末尾多余分隔符，但保留 "C:\" 这类根
-std::wstring trimTrailingSeparators(std::wstring path) {
-    while (path.size() > 3 && (path.back() == L'\\' || path.back() == L'/')) {
-        path.pop_back();
-    }
-    return path;
-}
-
 bool equalsIgnoreCase(const std::wstring& lhs, const std::wstring& rhs) {
     return CompareStringOrdinal(lhs.c_str(), static_cast<int>(lhs.size()),
                                 rhs.c_str(), static_cast<int>(rhs.size()),
@@ -84,21 +79,93 @@ bool startsWithIgnoreCase(const std::wstring& text, const std::wstring& prefix) 
 
 }  // namespace
 
-ArgParseStatus parseSourceArgument(int argc, wchar_t* const argv[], std::wstring& source) {
-    source.clear();
+// 去掉末尾多余分隔符，但保留 "C:\" 这类根（导出：FR-05 拼接目标路径用）
+std::wstring trimTrailingSeparators(std::wstring path) {
+    while (path.size() > 3 && (path.back() == L'\\' || path.back() == L'/')) {
+        path.pop_back();
+    }
+    return path;
+}
+
+ArgParseStatus parseSourceArguments(int argc, wchar_t* const argv[],
+                                    std::vector<std::wstring>& sources) {
+    sources.clear();
     if (argv == nullptr || argc <= 1) {
         return ArgParseStatus::MissingArgument;
     }
-    if (argc > 2) {
-        // 资源管理器传入多条路径，说明用户进行了多选
-        return ArgParseStatus::TooManyArguments;
+    // FR-05：资源管理器多选时每条路径作为独立参数传入（带引号）
+    for (int i = 1; i < argc; ++i) {
+        std::wstring item = stripSurroundingQuotes(argv[i] == nullptr ? L"" : argv[i]);
+        if (!item.empty()) {
+            sources.push_back(std::move(item));
+        }
     }
-
-    source = stripSurroundingQuotes(argv[1] == nullptr ? L"" : argv[1]);
-    if (source.empty()) {
+    if (sources.empty()) {
         return ArgParseStatus::MissingArgument;
     }
     return ArgParseStatus::Ok;
+}
+
+SourceStatus validateSource(const std::wstring& raw, std::wstring& canonical) {
+    canonical.clear();
+    if (raw.empty() || !pathExists(raw)) {
+        return SourceStatus::NotExist;
+    }
+    canonical = canonicalizePath(raw);
+    if (canonical.empty()) {
+        return SourceStatus::CanonicalFailed;
+    }
+    if (isPathTooLong(canonical)) {
+        canonical.clear();
+        return SourceStatus::TooLong;
+    }
+    if (isProtectedSource(canonical)) {
+        canonical.clear();
+        return SourceStatus::Protected;
+    }
+    return SourceStatus::Ok;
+}
+
+std::wstring describeSourceStatus(SourceStatus status) {
+    switch (status) {
+        case SourceStatus::NotExist:
+        case SourceStatus::CanonicalFailed:
+            return L"源路径无效";
+        case SourceStatus::TooLong:
+            return L"路径过长：暂不支持超过 260 字符的路径";
+        case SourceStatus::Protected:
+            return L"该位置属于系统关键目录，拒绝移动";
+        case SourceStatus::Ok:
+        default:
+            return std::wstring();
+    }
+}
+
+void dedupePaths(std::vector<std::wstring>& paths) {
+    std::vector<std::wstring> unique;
+    unique.reserve(paths.size());
+    for (std::wstring& path : paths) {
+        bool duplicate = false;
+        for (const std::wstring& kept : unique) {
+            if (equalsIgnoreCase(path, kept)) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) {
+            unique.push_back(std::move(path));
+        }
+    }
+    paths.swap(unique);
+}
+
+void sortDeepestFirst(std::vector<std::wstring>& paths) {
+    // 深路径先处理：路径 a 为 b 的前缀时必有 size(a) < size(b)，
+    // 稳定排序保证同类深度下维持用户传入顺序
+    std::stable_sort(paths.begin(), paths.end(),
+                     [](const std::wstring& a, const std::wstring& b) {
+                         return a.size() > b.size();
+                     });
 }
 
 std::wstring stripSurroundingQuotes(const std::wstring& path) {

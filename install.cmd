@@ -22,11 +22,12 @@ if errorlevel 1 (
 )
 
 rem 仅写入 HKCU，无需管理员权限；%LOCALAPPDATA% 在此处展开为真实路径
+rem MultiSelectModel=Player：允许多选，一次批量移动（重跑本脚本即可从 v1.0 升级）
 reg add "HKCU\Software\Classes\*\shell\QuickMove" /ve /t REG_SZ /d "移动到…" /f >nul
-reg add "HKCU\Software\Classes\*\shell\QuickMove" /v "MultiSelectModel" /t REG_SZ /d "Single" /f >nul
+reg add "HKCU\Software\Classes\*\shell\QuickMove" /v "MultiSelectModel" /t REG_SZ /d "Player" /f >nul
 reg add "HKCU\Software\Classes\*\shell\QuickMove\command" /ve /t REG_SZ /d "\"%EXE%\" \"%%1\"" /f >nul
 reg add "HKCU\Software\Classes\Directory\shell\QuickMove" /ve /t REG_SZ /d "移动到…" /f >nul
-reg add "HKCU\Software\Classes\Directory\shell\QuickMove" /v "MultiSelectModel" /t REG_SZ /d "Single" /f >nul
+reg add "HKCU\Software\Classes\Directory\shell\QuickMove" /v "MultiSelectModel" /t REG_SZ /d "Player" /f >nul
 reg add "HKCU\Software\Classes\Directory\shell\QuickMove\command" /ve /t REG_SZ /d "\"%EXE%\" \"%%1\"" /f >nul
 if errorlevel 1 (
   echo [错误] 写入注册表失败。

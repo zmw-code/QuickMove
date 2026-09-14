@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "config_store.h"
 #include "file_move.h"
@@ -74,15 +75,56 @@ int wmain(int argc, wchar_t** argv) {
     const std::wstring srcDirCanon = canonicalizePath(srcDir);
     const std::wstring innerDirCanon = canonicalizePath(innerDir);
 
-    // ---- FR-02 参数解析 ----
-    std::wstring out;
-    wchar_t* one[] = {const_cast<wchar_t*>(L"QuickMove.exe")};
-    check(parseSourceArgument(1, one, out) == ArgParseStatus::MissingArgument && out.empty(),
+    // ---- FR-02/FR-05 参数解析 ----
+    std::vector<std::wstring> sources;
+    wchar_t* none[] = {const_cast<wchar_t*>(L"QuickMove.exe")};
+    check(parseSourceArguments(1, none, sources) == ArgParseStatus::MissingArgument && sources.empty(),
           "argc=1 -> MissingArgument");
 
-    wchar_t* quoted[] = {const_cast<wchar_t*>(L"QuickMove.exe"), const_cast<wchar_t*>(L"\"C:\\a.txt\"")};
-    check(parseSourceArgument(2, quoted, out) == ArgParseStatus::Ok && out == L"C:\\a.txt",
-          "argv[1] quoted -> Ok + quotes stripped");
+    wchar_t* many[] = {const_cast<wchar_t*>(L"QuickMove.exe"),
+                       const_cast<wchar_t*>(L"\"C:\\a.txt\""), const_cast<wchar_t*>(L"C:\\b.txt")};
+    check(parseSourceArguments(3, many, sources) == ArgParseStatus::Ok &&
+          sources.size() == 2 && sources[0] == L"C:\\a.txt" && sources[1] == L"C:\\b.txt",
+          "argc=3 -> Ok, 2 quoted paths collected (FR-05)");
+
+    wchar_t* blanks[] = {const_cast<wchar_t*>(L"QuickMove.exe"),
+                         const_cast<wchar_t*>(L"   "), const_cast<wchar_t*>(L"C:\\a.txt")};
+    check(parseSourceArguments(3, blanks, sources) == ArgParseStatus::Ok && sources.size() == 1,
+          "blank arguments skipped");
+
+    // ---- FR-05 单项源校验 ----
+    {
+        std::wstring canonical;
+        check(validateSource(root + L"\\no_such_thing", canonical) == SourceStatus::NotExist,
+              "validateSource: missing -> NotExist");
+        check(validateSource(L"C:\\Windows", canonical) == SourceStatus::Protected,
+              "validateSource: C:\\Windows -> Protected");
+        check(validateSource(srcDir, canonical) == SourceStatus::Ok && same(canonical, srcDirCanon),
+              "validateSource: normal dir -> Ok + canonical");
+
+        // 用 \\?\ 前缀创建超过 260 字符的文件，验证长度拦截（\\?\ 之后必须是绝对路径）
+        const std::wstring absRoot = canonicalizePath(root);
+        const std::wstring longPath =
+            L"\\\\?\\" + absRoot + L"\\long_" + std::wstring(220, L'a') + L".txt";
+        touch(longPath);
+        check(validateSource(longPath, canonical) == SourceStatus::TooLong,
+              "validateSource: >260 chars -> TooLong");
+        DeleteFileW(longPath.c_str());
+    }
+
+    // ---- FR-05 去重与深路径优先 ----
+    {
+        std::vector<std::wstring> paths = {L"C:\\A", L"c:\\a", L"C:\\b", L"C:\\A"};
+        dedupePaths(paths);
+        check(paths.size() == 2 && same(paths[0], L"C:\\A") && same(paths[1], L"C:\\b"),
+              "dedupePaths: case-insensitive, keeps first order");
+    }
+    {
+        std::vector<std::wstring> paths = {L"C:\\p", L"C:\\p\\c\\g", L"C:\\p\\c"};
+        sortDeepestFirst(paths);
+        check(same(paths[0], L"C:\\p\\c\\g") && same(paths[1], L"C:\\p\\c") && same(paths[2], L"C:\\p"),
+              "sortDeepestFirst: deepest path first");
+    }
 
     // ---- 路径规范化与工具函数 ----
     check(same(canonicalizePath(root + L"\\..\\selftest"), rootCanon), "canonicalize collapses '..'");

@@ -1,21 +1,46 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace quickmove {
 
-// FR-02：命令行参数解析结果
+// FR-02/FR-05：命令行参数解析结果
 enum class ArgParseStatus {
     Ok,
     MissingArgument,   // 未检测到参数（直接双击运行）
-    TooManyArguments,  // 收到多条路径（多选），v1 不支持批量
 };
 
-// 解析命令行参数，argv[1] 视为源路径（FR-02）
-ArgParseStatus parseSourceArgument(int argc, wchar_t* const argv[], std::wstring& source);
+// 解析命令行参数：argv[1..argc-1] 均视为源路径（FR-05 批量移动，单选即 N=1）；
+// 逐项去引号与首尾空白，跳过空项；全部为空时返回 MissingArgument
+ArgParseStatus parseSourceArguments(int argc, wchar_t* const argv[],
+                                    std::vector<std::wstring>& sources);
+
+// FR-05：单项源路径预校验（存在性 → 规范化 → 长度 → 黑名单），失败项进入汇总而不中断批次
+enum class SourceStatus {
+    Ok,
+    NotExist,        // 源路径无效
+    CanonicalFailed, // 规范化失败（视为无效）
+    TooLong,         // 超过 260 字符
+    Protected,       // 系统关键目录
+};
+
+SourceStatus validateSource(const std::wstring& raw, std::wstring& canonical);
+
+// 校验结果的中文描述（FR-05 失败汇总用）
+std::wstring describeSourceStatus(SourceStatus status);
+
+// FR-05：规范化路径按大小写不敏感去重，保留首次出现顺序
+void dedupePaths(std::vector<std::wstring>& paths);
+
+// FR-05：按路径长度降序稳定排序（深路径先移：父子文件夹同选时子项先移出，父项随后整体移动）
+void sortDeepestFirst(std::vector<std::wstring>& paths);
 
 // 去除路径首尾可能存在的引号与空白（FR-02）
 std::wstring stripSurroundingQuotes(const std::wstring& path);
+
+// 去掉末尾多余分隔符，但保留 "C:\" 这类根（FR-05 拼接目标路径用）
+std::wstring trimTrailingSeparators(std::wstring path);
 
 // 规范化路径：展开为绝对路径 + 展开 8.3 短名 + 去掉末尾多余分隔符
 std::wstring canonicalizePath(const std::wstring& path);

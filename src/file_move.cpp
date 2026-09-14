@@ -3,7 +3,7 @@
 namespace quickmove {
 
 const wchar_t kCrossVolumeText[] = L"当前版本暂不支持跨分区移动";
-const wchar_t kNameConflictText[] = L"目标位置已存在同名文件，移动终止";
+const wchar_t kNameConflictText[] = L"目标位置已存在同名文件";
 const wchar_t kAccessDeniedText[] = L"权限不足，无法完成移动";
 const wchar_t kInUseText[] = L"文件正在使用，请关闭相关程序后重试";
 const wchar_t kNotFoundText[] = L"源文件或目标路径不存在";
