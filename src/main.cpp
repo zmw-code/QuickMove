@@ -1,5 +1,5 @@
 // 快捷式文件转移 (QuickMove) v1.1
-// 需求：REQUIREMENTS.md（FR-01 ~ FR-05，v1.1 批量移动）
+// 需求：REQUIREMENTS.md（FR-01 ~ FR-05；批量入口见决策 D9/D10）
 
 #include <windows.h>
 
@@ -22,6 +22,7 @@ using namespace quickmove;
 namespace {
 
 const wchar_t kAppTitle[] = L"快捷式文件转移";
+const wchar_t kBatchSwitch[] = L"/batch";
 
 // 退出码
 const int kExitSuccess = 0;      // 全部移动成功
@@ -65,26 +66,8 @@ int finishWithReport(int successCount, int attemptedCount,
     return (successCount > 0 || attemptedCount > 0) ? kExitFailed : kExitNotExecuted;
 }
 
-}  // namespace
-
-int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
-    int argc = 0;
-    wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    if (argv == nullptr) {
-        showWarning(L"命令行参数解析失败，请通过右键菜单使用本工具");
-        return kExitNotExecuted;
-    }
-
-    // FR-05：argv[1..n] 均为源路径（多选批量；单选即 N=1）
-    std::vector<std::wstring> rawSources;
-    const ArgParseStatus parseStatus = parseSourceArguments(argc, argv, rawSources);
-    LocalFree(argv);
-
-    if (parseStatus == ArgParseStatus::MissingArgument) {
-        showWarning(L"请通过右键菜单使用本工具");
-        return kExitNotExecuted;
-    }
-
+// FR-05：共用移动管线——预校验/去重 → 选目标 → 逐项目标校验与跨卷拒绝 → 深路径优先执行 → 汇总
+int runMoveFlow(std::vector<std::wstring> rawSources) {
     // FR-05.2：逐项预校验（存在性/规范化/长度/黑名单），失败项进汇总，不中断其余项
     std::vector<std::wstring> pending;  // 预校验通过的规范化路径
     std::vector<FailureEntry> failures;
@@ -103,12 +86,6 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
         return finishWithReport(0, 0, failures, std::wstring());
     }
 
-    const HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    if (FAILED(comResult)) {
-        showWarning(L"初始化系统对话框失败，无法继续");
-        return kExitFailed;
-    }
-
     // FR-03：优先定位到上次成功移动的目标路径，失效则回退到“文档”
     std::wstring initialDir;
     if (loadLastUsedPath(initialDir) && !isDirectory(initialDir)) {
@@ -121,7 +98,6 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     // FR-05.3：整批共用一次系统原生目标选择（多对一）
     std::wstring targetDir;
     const PickFolderStatus pickStatus = pickFolder(nullptr, initialDir, targetDir);
-    CoUninitialize();
 
     if (pickStatus == PickFolderStatus::Cancelled) {
         // 用户取消：不执行、不更新记录；此前被拒的项仍说明原因
@@ -192,4 +168,68 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     }
 
     return finishWithReport(successCount, attemptedCount, failures, targetDir);
+}
+
+}  // namespace
+
+int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
+    int argc = 0;
+    wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv == nullptr) {
+        showWarning(L"命令行参数解析失败，请通过右键菜单使用本工具");
+        return kExitNotExecuted;
+    }
+
+    // D9/D10：两种入口——
+    //   右键单选（MultiSelectModel=Single）："QuickMove.exe" "<源路径>"
+    //   批量移动（文件夹空白处右键）："QuickMove.exe" /batch "<种子目录>"
+    // 说明：Explorer 对经典静态动词按“每文件一次调用”并行派发（实测 Win11 26200），
+    // Single 模式下多选时右键项自动隐藏，批量统一走 /batch 入口，单进程无派发问题。
+    bool batchMode = false;
+    std::wstring batchSeedDir;
+    if (argc >= 2 && argv[1] != nullptr && _wcsicmp(argv[1], kBatchSwitch) == 0) {
+        batchMode = true;
+        if (argc >= 3 && argv[2] != nullptr) {
+            batchSeedDir = argv[2];
+        }
+    }
+
+    std::vector<std::wstring> rawSources;
+    if (!batchMode) {
+        const ArgParseStatus parseStatus = parseSourceArguments(argc, argv, rawSources);
+        if (parseStatus == ArgParseStatus::MissingArgument) {
+            LocalFree(argv);
+            showWarning(L"请通过右键菜单使用本工具");
+            return kExitNotExecuted;
+        }
+    }
+    LocalFree(argv);
+
+    const HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    if (FAILED(comResult)) {
+        showWarning(L"初始化系统对话框失败，无法继续");
+        return kExitFailed;
+    }
+
+    if (batchMode) {
+        // D10：批量入口——原生文件对话框多选源（文件与文件夹均可），种子目录为右键所在文件夹
+        std::wstring seed = batchSeedDir;
+        if (seed.empty() || !isDirectory(seed)) {
+            seed = documentsFolder();
+        }
+        const PickFilesStatus pickStatus = pickFiles(nullptr, seed, rawSources);
+        if (pickStatus == PickFilesStatus::Cancelled) {
+            CoUninitialize();
+            return kExitNotExecuted;
+        }
+        if (pickStatus != PickFilesStatus::Picked || rawSources.empty()) {
+            CoUninitialize();
+            showWarning(L"未能获取所选项目，操作终止");
+            return kExitFailed;
+        }
+    }
+
+    const int exitCode = runMoveFlow(std::move(rawSources));
+    CoUninitialize();
+    return exitCode;
 }
